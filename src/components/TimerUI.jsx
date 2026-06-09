@@ -44,8 +44,7 @@ export default function TimerUI({ user, auth }) {
       setLeaderboard(rankingData);
     });
 
-    // HISTÓRICO CORRIGIDO: Removido o 'orderBy' do Firestore para não dar erro de índice invisível.
-    // A ordenação agora é feita localmente no JavaScript para garantir que sempre apareça.
+    // Histórico Individual 
     const qHistory = query(collection(db, "solves"), where("uid", "==", user.uid));
     const unsubHistory = onSnapshot(qHistory, (snapshot) => {
       const historyData = [];
@@ -53,10 +52,10 @@ export default function TimerUI({ user, auth }) {
         historyData.push({ id: doc.id, ...doc.data() });
       });
       
-      // Ordena do mais recente para o mais antigo e limita a 20
+      // Ordenação à prova de falhas (Lida perfeitamente com tempos recém-salvos)
       historyData.sort((a, b) => {
-        const timeA = a.date?.toMillis?.() || 0;
-        const timeB = b.date?.toMillis?.() || 0;
+        const timeA = a.date ? (typeof a.date.toMillis === 'function' ? a.date.toMillis() : 0) : Date.now();
+        const timeB = b.date ? (typeof b.date.toMillis === 'function' ? b.date.toMillis() : 0) : Date.now();
         return timeB - timeA;
       });
       
@@ -121,7 +120,7 @@ export default function TimerUI({ user, auth }) {
     resetAndNext();
   };
 
-  // SALVAMENTO MANUAL COMO DNF (Aparece no histórico, mas não afeta recorde)
+  // SALVAMENTO MANUAL COMO DNF
   const handleDNF = async () => {
     try {
       if (!user?.uid) return;
@@ -141,13 +140,18 @@ export default function TimerUI({ user, auth }) {
     resetAndNext();
   };
 
-  // DELETAR TEMPO DA LIXEIRA
+  // DELETAR TEMPO (EXCLUSÃO OTIMISTA INSTANTÂNEA)
   const handleDeleteSolve = async (solveId, solveTime, isSolveDNF) => {
     if (!confirm("Deseja apagar permanentemente esta resolução do seu histórico?")) return;
 
+    // 1. Remove da tela IMEDIATAMENTE (Otimista)
+    setUserHistory((prev) => prev.filter((s) => s.id !== solveId));
+
     try {
+      // 2. Executa a deleção real no Firebase no background
       await deleteDoc(doc(db, "solves", solveId));
 
+      // 3. Recalcula o Recorde (PB) se o tempo excluído era o seu melhor tempo
       if (!isSolveDNF && solveTime === personalBest) {
         const remaining = userHistory.filter((s) => s.id !== solveId && !s.isDNF);
         if (remaining.length === 0) {
@@ -161,6 +165,7 @@ export default function TimerUI({ user, auth }) {
       }
     } catch (e) {
       console.error("Erro ao deletar tempo:", e);
+      alert("Houve um problema com os servidores. O tempo não pôde ser excluído.");
     }
   };
 
@@ -245,7 +250,7 @@ export default function TimerUI({ user, auth }) {
                 userHistory.map((solve, idx) => (
                   <div key={solve.id} className="flex items-center justify-between p-2 bg-zinc-950 border border-zinc-800/60 rounded-xl text-xs gap-3">
                     <span className="text-zinc-500 font-mono">#{userHistory.length - idx}</span>
-                    <span className={`font-mono font-bold flex-1 ${solve.isDNF ? "text-red-500" : "text-zinc-200"}`}>
+                    <span className={`font-mono font-bold flex-1 ${solve.isDNF ? "text-red-500 line-through" : "text-zinc-200"}`}>
                       {solve.isDNF ? "DNF" : formatTime(solve.time)}
                     </span>
                     
@@ -328,7 +333,7 @@ export default function TimerUI({ user, auth }) {
                 >
                   <AlertTriangle className="w-4 h-4" /> Marcar como DNF
                 </button>
-                <button onClick={() => { setDiffMsg(null); resetTimer(); setScramble(generateScramble()); }} className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold uppercase text-xs tracking-wider cursor-pointer transition-colors">
+                <button onClick={() => { setDiffMsg(null); resetTimer(); setScramble(generateScramble()); }} className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold uppercase text-xs tracking-wider cursor-pointer transition-colors hover:text-white">
                   Descartar
                 </button>
               </div>
