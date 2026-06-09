@@ -52,10 +52,10 @@ export default function TimerUI({ user, auth }) {
         historyData.push({ id: doc.id, ...doc.data() });
       });
       
-      // Ordenação à prova de falhas (Lida perfeitamente com tempos recém-salvos)
+      // Ordenação corrigida com Optional Chaining (à prova de null/undefined)
       historyData.sort((a, b) => {
-        const timeA = a.date ? (typeof a.date.toMillis === 'function' ? a.date.toMillis() : 0) : Date.now();
-        const timeB = b.date ? (typeof b.date.toMillis === 'function' ? b.date.toMillis() : 0) : Date.now();
+        const timeA = a.date?.toMillis?.() || Date.now();
+        const timeB = b.date?.toMillis?.() || Date.now();
         return timeB - timeA;
       });
       
@@ -219,7 +219,7 @@ export default function TimerUI({ user, auth }) {
       {/* LAYOUT PRINCIPAL */}
       <main className="grid grid-cols-1 lg:grid-cols-12 gap-6 my-auto py-6 max-w-7xl w-full mx-auto items-stretch">
         
-        {/* COLUNA ESQUERDA (RANKING + HISTÓRICO CORRIGIDO) */}
+        {/* COLUNA ESQUERDA */}
         <section className={`lg:col-span-4 flex flex-col gap-4 transition-all duration-200 ${timerState === "running" ? "opacity-0 blur-md pointer-events-none" : "opacity-100"}`}>
           
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg flex-1">
@@ -279,7 +279,7 @@ export default function TimerUI({ user, auth }) {
           </div>
         </section>
 
-        {/* COLUNA DIREITA (SCRAMBLE + CRONÔMETRO + BOTÕES MANUAIS) */}
+        {/* COLUNA DIREITA */}
         <section className="lg:col-span-8 flex flex-col gap-6 justify-between items-center min-h-[460px]">
           
           <div className={`w-full transition-all duration-300 transform ${timerState === "running" ? "opacity-0 scale-95 pointer-events-none" : "opacity-100 scale-100"}`}>
