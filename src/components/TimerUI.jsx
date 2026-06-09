@@ -29,12 +29,11 @@ export default function TimerUI({ user, auth }) {
   const [userHistory, setUserHistory] = useState([]);
   const [copiedId, setCopiedId] = useState(null);
 
-  // Inicializa dados e escuta Firestore em tempo real
+  // 1. Escuta o Banco de Dados em tempo real (Ranking e Histórico)
   useEffect(() => {
     setScramble(generateScramble());
     fetchPersonalBest();
 
-    // 1. Ranking entre Amigos
     const qRank = query(collection(db, "users"), orderBy("personalBest", "asc"), limit(10));
     const unsubRank = onSnapshot(qRank, (snapshot) => {
       const rankingData = [];
@@ -44,7 +43,6 @@ export default function TimerUI({ user, auth }) {
       setLeaderboard(rankingData);
     });
 
-    // 2. Histórico Pessoal Completo de tentativas
     const qHistory = query(
       collection(db, "solves"),
       where("uid", "==", user.uid),
@@ -74,14 +72,14 @@ export default function TimerUI({ user, auth }) {
     }
   };
 
-  // SALVAMENTO AUTOMÁTICO ASSIM QUE O CRONÔMETRO PARA
+  // 2. SALVAMENTO AUTOMÁTICO: Assim que o cronômetro parar, já salva o tempo!
   useEffect(() => {
     if (timerState === "stopped" && time > 0) {
-      autoSaveSolve(time, false);
+      autoSaveSolve(time);
     }
   }, [timerState]);
 
-  // Captura atalho de teclado "D" para marcar como DNF
+  // Atalho de Teclado: Aperte "D" para transformar a última solução em DNF rapidamente
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (timerState === "stopped" && e.key.toLowerCase() === "d") {
@@ -92,57 +90,51 @@ export default function TimerUI({ user, auth }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [timerState, userHistory]);
 
-  const autoSaveSolve = async (solveTime, isDNF = false) => {
+  // Função que executa o salvamento automático
+  const autoSaveSolve = async (solveTime) => {
     try {
       if (!user?.uid) return;
-
       const currentScramble = scramble;
 
-      // 1. Grava a tentativa na lista geral de solves
       await addDoc(collection(db, "solves"), {
         uid: user.uid,
         displayName: user.displayName || "Cubista",
         time: solveTime,
         scramble: currentScramble,
-        isDNF: isDNF,
+        isDNF: false,
         date: serverTimestamp(),
       });
 
-      // 2. Só calcula recordes/PB se a resolução não for DNF
-      if (!isDNF) {
-        if (personalBest === null || solveTime < personalBest) {
-          await setDoc(
-            doc(db, "users", user.uid),
-            {
-              uid: user.uid,
-              displayName: user.displayName || "Cubista",
-              personalBest: solveTime,
-            },
-            { merge: true }
-          );
-          setPersonalBest(solveTime);
-          setDiffMsg("Novo PB!");
-        } else {
-          const diff = solveTime - personalBest;
-          setDiffMsg((diff > 0 ? "+" : "") + (diff / 1000).toFixed(2));
-        }
+      // Recalcula o Recorde (PB)
+      if (personalBest === null || solveTime < personalBest) {
+        await setDoc(doc(db, "users", user.uid), {
+          uid: user.uid,
+          displayName: user.displayName || "Cubista",
+          personalBest: solveTime,
+        }, { merge: true });
+        setPersonalBest(solveTime);
+        setDiffMsg("Novo PB!");
       } else {
-        setDiffMsg("DNF");
+        const diff = solveTime - personalBest;
+        setDiffMsg((diff > 0 ? "+" : "") + (diff / 1000).toFixed(2));
       }
 
+      // Gera o próximo embaralhamento logo após salvar
       setScramble(generateScramble());
     } catch (e) {
       console.error("Erro no salvamento automático:", e);
     }
   };
 
+  // 3. CONVERTER PARA DNF: Edita a resolução recém-salva e marca como DNF
   const handleLastSolveToDNF = async () => {
     if (userHistory.length === 0) return;
-    const lastSolve = userHistory[0];
+    const lastSolve = userHistory[0]; // Pega a mais recente
 
     try {
       await setDoc(doc(db, "solves", lastSolve.id), { isDNF: true }, { merge: true });
       
+      // Se era o seu PB, força recalcular com os tempos que sobraram
       if (lastSolve.time === personalBest) {
         const remaining = userHistory.slice(1).filter(s => !s.isDNF);
         if (remaining.length === 0) {
@@ -154,13 +146,14 @@ export default function TimerUI({ user, auth }) {
           await setDoc(doc(db, "users", user.uid), { personalBest: newBest }, { merge: true });
         }
       }
-      setDiffMsg("DNF");
-      resetTimer();
+      setDiffMsg("Marcado como DNF");
+      resetTimer(); // Limpa a tela para a próxima
     } catch (e) {
-      console.error("Erro ao marcar DNF:", e);
+      console.error("Erro ao converter para DNF:", e);
     }
   };
 
+  // 4. DELETAR TEMPO (LIXEIRA)
   const handleDeleteSolve = async (solveId, solveTime, isSolveDNF) => {
     if (!confirm("Deseja apagar permanentemente esta resolução do seu histórico?")) return;
 
@@ -183,6 +176,7 @@ export default function TimerUI({ user, auth }) {
     }
   };
 
+  // 5. COPIAR EMBARALHAMENTO DO HISTÓRICO
   const copyScrambleToClipboard = (scrambleText, id) => {
     navigator.clipboard.writeText(scrambleText);
     setCopiedId(id);
@@ -259,9 +253,9 @@ export default function TimerUI({ user, auth }) {
                 <div className="text-center py-6 text-zinc-600 text-xs">Nenhum tempo gravado.</div>
               ) : (
                 userHistory.map((solve, idx) => (
-                  <div key={solve.id} className="flex items-center justify-between p-2 bg-zinc-950 border border-zinc-800/60 rounded-xl text-xs gap-4">
+                  <div key={solve.id} className="flex items-center justify-between p-2 bg-zinc-950 border border-zinc-800/60 rounded-xl text-xs gap-3">
                     <span className="text-zinc-500 font-mono">#{userHistory.length - idx}</span>
-                    <span className={`font-mono font-bold flex-1 ${solve.isDNF ? "text-red-500 line-through" : "text-zinc-200"}`}>
+                    <span className={`font-mono font-bold flex-1 ${solve.isDNF ? "text-red-500" : "text-zinc-200"}`}>
                       {solve.isDNF ? "DNF" : formatTime(solve.time)}
                     </span>
                     
@@ -272,16 +266,16 @@ export default function TimerUI({ user, auth }) {
                           className="text-zinc-500 hover:text-yellow-400 p-1 transition-colors cursor-pointer"
                           title={`Copiar embaralhamento: ${solve.scramble}`}
                         >
-                          {copiedId === solve.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                          {copiedId === solve.id ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
                         </button>
                       )}
                       
                       <button 
                         onClick={() => handleDeleteSolve(solve.id, solve.time, solve.isDNF)} 
                         className="text-zinc-500 hover:text-red-500 p-1 transition-colors cursor-pointer" 
-                        title="Deletar este tempo"
+                        title="Deletar este tempo permanentemente"
                       >
-                        <Trash2 size={13} />
+                        <Trash2 size={14} />
                       </button>
                     </div>
                   </div>
@@ -303,7 +297,7 @@ export default function TimerUI({ user, auth }) {
             </div>
           </div>
 
-          {/* CRONÔMETRO CENTRAL SEGURO (CORRIGIDO PARA NÃO DAR TELA BRANCA) */}
+          {/* CRONÔMETRO CENTRAL SEGURO */}
           <div
             onMouseDown={timerState === "idle" || timerState === "stopped" ? handleTouchZoneStart : undefined}
             onMouseUp={timerState === "holding" || timerState === "ready" ? handleTouchZoneEnd : undefined}
@@ -316,18 +310,18 @@ export default function TimerUI({ user, auth }) {
               {timerState === "holding" && "PREPARANDO..."}
               {timerState === "ready" && "SOLTE PARA COMEÇAR!"}
               {timerState === "idle" && "SEGURE ESPAÇO OU CLIQUE NA TELA PARA ARMAR"}
-              {timerState === "running" && "TEMPO CORRENDO OCULTO..."}
+              {timerState === "running" && "RESOLVENDO..."}
               {timerState === "stopped" && "TEMPO SALVO AUTOMATICAMENTE!"}
             </span>
 
             <div className="text-center relative">
               <div className={`font-mono text-7xl sm:text-8xl md:text-9xl lg:text-[10rem] font-black tracking-tight tabular-nums ${timerColor}`}>
-                {/* Correção da tela branca: passamos uma string pura e segura para o render do React */}
-                {timerState === "running" ? "0:00.000" : formatTime(time)}
+                {/* Oculta o tempo e resolve problema de tela branca mandando texto puro */}
+                {timerState === "running" ? "0.00" : formatTime(time || 0)}
               </div>
               {timerState === "stopped" && diffMsg && (
-                <div className={`absolute -bottom-10 left-1/2 -translate-x-1/2 text-xs font-bold tracking-wider uppercase bg-zinc-900 border border-zinc-800 px-3 py-1 rounded-lg ${diffMsg === "DNF" || diffMsg.startsWith("+") ? "text-red-400" : "text-emerald-400"}`}>
-                  {diffMsg === "Novo PB!" || diffMsg === "DNF" ? diffMsg : `Comparativo: ${diffMsg}s`}
+                <div className={`absolute -bottom-10 left-1/2 -translate-x-1/2 text-xs font-bold tracking-wider uppercase bg-zinc-900 border border-zinc-800 px-3 py-1 rounded-lg ${diffMsg === "DNF" || diffMsg === "Marcado como DNF" || diffMsg.startsWith("+") ? "text-red-400" : "text-emerald-400"}`}>
+                  {diffMsg === "Novo PB!" || diffMsg === "DNF" || diffMsg === "Marcado como DNF" ? diffMsg : `Comparativo: ${diffMsg}s`}
                 </div>
               )}
             </div>
@@ -343,7 +337,7 @@ export default function TimerUI({ user, auth }) {
                 >
                   <AlertTriangle className="w-4 h-4" /> Marcar como DNF (Tecla D)
                 </button>
-                <button onClick={() => { setDiffMsg(null); resetTimer(); }} className="px-8 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold uppercase text-xs tracking-wider cursor-pointer">
+                <button onClick={() => { setDiffMsg(null); resetTimer(); }} className="px-8 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold uppercase text-xs tracking-wider cursor-pointer transition-colors hover:text-white">
                   Próxima Resolução
                 </button>
               </div>
