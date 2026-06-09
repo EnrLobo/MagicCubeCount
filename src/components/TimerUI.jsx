@@ -17,7 +17,7 @@ import {
   limit,
   where
 } from "firebase/firestore";
-import { LogOut, Trophy, Trash2, RefreshCw, Clock, Copy, Check, AlertTriangle } from "lucide-react";
+import { LogOut, Trophy, Trash2, RefreshCw, Clock, Copy, Check, AlertTriangle, Zap } from "lucide-react";
 
 export default function TimerUI({ user, auth }) {
   const { timerState, time, resetTimer, startHolding, releaseHolding } = useStackmatTimer();
@@ -34,7 +34,7 @@ export default function TimerUI({ user, auth }) {
     setScramble(generateScramble());
     fetchPersonalBest();
 
-    // 1. Ranking entre Amigos (Focado nos melhores PBs de cada um)
+    // 1. Ranking entre Amigos
     const qRank = query(collection(db, "users"), orderBy("personalBest", "asc"), limit(10));
     const unsubRank = onSnapshot(qRank, (snapshot) => {
       const rankingData = [];
@@ -74,14 +74,14 @@ export default function TimerUI({ user, auth }) {
     }
   };
 
-  // REQUISITO: SALVAMENTO AUTOMÁTICO ASSIM QUE O CRONÔMETRO PARA
+  // SALVAMENTO AUTOMÁTICO ASSIM QUE O CRONÔMETRO PARA
   useEffect(() => {
     if (timerState === "stopped" && time > 0) {
       autoSaveSolve(time, false);
     }
   }, [timerState]);
 
-  // Captura atalho de teclado "D" para marcar a última resolução como DNF rapidamente
+  // Captura atalho de teclado "D" para marcar como DNF
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (timerState === "stopped" && e.key.toLowerCase() === "d") {
@@ -92,7 +92,6 @@ export default function TimerUI({ user, auth }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [timerState, userHistory]);
 
-  // Função centralizada para salvar resoluções na nuvem de forma automática
   const autoSaveSolve = async (solveTime, isDNF = false) => {
     try {
       if (!user?.uid) return;
@@ -109,7 +108,7 @@ export default function TimerUI({ user, auth }) {
         date: serverTimestamp(),
       });
 
-      // 2. Só calcula recordes/PB se a resolução NÃO for um DNF
+      // 2. Só calcula recordes/PB se a resolução não for DNF
       if (!isDNF) {
         if (personalBest === null || solveTime < personalBest) {
           await setDoc(
@@ -131,23 +130,19 @@ export default function TimerUI({ user, auth }) {
         setDiffMsg("DNF");
       }
 
-      // Prepara o próximo cenário instantaneamente
       setScramble(generateScramble());
     } catch (e) {
       console.error("Erro no salvamento automático:", e);
     }
   };
 
-  // Converte a resolução recém-feita em DNF caso o botão ou atalho seja acionado
   const handleLastSolveToDNF = async () => {
     if (userHistory.length === 0) return;
     const lastSolve = userHistory[0];
 
     try {
-      // Atualiza o registro no Firestore marcando como DNF
       await setDoc(doc(db, "solves", lastSolve.id), { isDNF: true }, { merge: true });
       
-      // Se esse tempo deletado era o seu recorde, força a reavaliação do Placar Geral
       if (lastSolve.time === personalBest) {
         const remaining = userHistory.slice(1).filter(s => !s.isDNF);
         if (remaining.length === 0) {
@@ -159,21 +154,19 @@ export default function TimerUI({ user, auth }) {
           await setDoc(doc(db, "users", user.uid), { personalBest: newBest }, { merge: true });
         }
       }
-      setDiffMsg("Marcado como DNF");
+      setDiffMsg("DNF");
       resetTimer();
     } catch (e) {
-      console.error("Erro ao converter para DNF:", e);
+      console.error("Erro ao marcar DNF:", e);
     }
   };
 
-  // Exclui tempos do histórico e recalcula o ranking
   const handleDeleteSolve = async (solveId, solveTime, isSolveDNF) => {
     if (!confirm("Deseja apagar permanentemente esta resolução do seu histórico?")) return;
 
     try {
       await deleteDoc(doc(db, "solves", solveId));
 
-      // Se o tempo que você removeu era o seu PB ativo, recalcula o ranking com os tempos válidos restantes
       if (!isSolveDNF && solveTime === personalBest) {
         const remaining = userHistory.filter((s) => s.id !== solveId && !s.isDNF);
         if (remaining.length === 0) {
@@ -235,10 +228,10 @@ export default function TimerUI({ user, auth }) {
       {/* LAYOUT PRINCIPAL */}
       <main className="grid grid-cols-1 lg:grid-cols-12 gap-6 my-auto py-6 max-w-7xl w-full mx-auto items-stretch">
         
-        {/* COLUNA ESQUERDA (RANKING + HISTÓRICO) */}
+        {/* COLUNA ESQUERDA */}
         <section className={`lg:col-span-4 flex flex-col gap-4 transition-all duration-200 ${timerState === "running" ? "opacity-0 blur-md pointer-events-none" : "opacity-100"}`}>
           
-          {/* RANKING ONLINE CONTÍNUO */}
+          {/* RANKING */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg flex-1">
             <div className="flex items-center gap-2 pb-2 border-b border-zinc-800 mb-3">
               <Trophy className="w-4 h-4 text-amber-400" />
@@ -255,7 +248,7 @@ export default function TimerUI({ user, auth }) {
             </div>
           </div>
 
-          {/* HISTÓRICO COMPLETO COM INDICAÇÃO DE SCRAMBLE E DNF */}
+          {/* HISTÓRICO COM BOTÕES CORRIGIDOS */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg flex-1">
             <div className="flex items-center gap-2 pb-2 border-b border-zinc-800 mb-3">
               <Clock className="w-4 h-4 text-cyan-400" />
@@ -266,31 +259,31 @@ export default function TimerUI({ user, auth }) {
                 <div className="text-center py-6 text-zinc-600 text-xs">Nenhum tempo gravado.</div>
               ) : (
                 userHistory.map((solve, idx) => (
-                  <div key={solve.id} className="flex items-center justify-between p-2 bg-zinc-950 border border-zinc-800/60 rounded-xl text-xs gap-2">
+                  <div key={solve.id} className="flex items-center justify-between p-2 bg-zinc-950 border border-zinc-800/60 rounded-xl text-xs gap-4">
                     <span className="text-zinc-500 font-mono">#{userHistory.length - idx}</span>
                     <span className={`font-mono font-bold flex-1 ${solve.isDNF ? "text-red-500 line-through" : "text-zinc-200"}`}>
                       {solve.isDNF ? "DNF" : formatTime(solve.time)}
                     </span>
                     
-                    {/* Copiar fórmula de scramble usada */}
-                    {solve.scramble && (
+                    <div className="flex items-center gap-2">
+                      {solve.scramble && (
+                        <button 
+                          onClick={() => copyScrambleToClipboard(solve.scramble, solve.id)}
+                          className="text-zinc-500 hover:text-yellow-400 p-1 transition-colors cursor-pointer"
+                          title={`Copiar embaralhamento: ${solve.scramble}`}
+                        >
+                          {copiedId === solve.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                        </button>
+                      )}
+                      
                       <button 
-                        onClick={() => copyScrambleToClipboard(solve.scramble, solve.id)}
-                        className="text-zinc-500 hover:text-yellow-400 p-1 transition-colors cursor-pointer"
-                        title="Copiar este embaralhar para competir"
+                        onClick={() => handleDeleteSolve(solve.id, solve.time, solve.isDNF)} 
+                        className="text-zinc-500 hover:text-red-500 p-1 transition-colors cursor-pointer" 
+                        title="Deletar este tempo"
                       >
-                        {copiedId === solve.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                        <Trash2 size={13} />
                       </button>
-                    )}
-                    
-                    {/* Botão de Excluir */}
-                    <button 
-                      onClick={() => handleDeleteSolve(solve.id, solve.time, solve.isDNF)} 
-                      className="text-zinc-600 hover:text-red-500 p-1 transition-colors cursor-pointer" 
-                      title="Deletar este tempo"
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -298,10 +291,10 @@ export default function TimerUI({ user, auth }) {
           </div>
         </section>
 
-        {/* COLUNA DIREITA (SCRAMBLE + CRONÔMETRO) */}
+        {/* COLUNA DIREITA */}
         <section className="lg:col-span-8 flex flex-col gap-6 justify-between items-center min-h-[460px]">
           
-          {/* EMBARALHADOR OFICIAL */}
+          {/* SCRAMBLE */}
           <div className={`w-full transition-all duration-300 transform ${timerState === "running" ? "opacity-0 scale-95 pointer-events-none" : "opacity-100 scale-100"}`}>
             <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 text-center shadow-md">
               <span className="text-[9px] uppercase tracking-widest text-zinc-400 font-bold block mb-1.5">Scramble Oficial (3x3x3)</span>
@@ -310,7 +303,7 @@ export default function TimerUI({ user, auth }) {
             </div>
           </div>
 
-          {/* CRONÔMETRO CENTRAL (REQUISITO: MANTÉM 0.00 PARADO ENQUANTO RODAR) */}
+          {/* CRONÔMETRO CENTRAL SEGURO (CORRIGIDO PARA NÃO DAR TELA BRANCA) */}
           <div
             onMouseDown={timerState === "idle" || timerState === "stopped" ? handleTouchZoneStart : undefined}
             onMouseUp={timerState === "holding" || timerState === "ready" ? handleTouchZoneEnd : undefined}
@@ -329,8 +322,8 @@ export default function TimerUI({ user, auth }) {
 
             <div className="text-center relative">
               <div className={`font-mono text-7xl sm:text-8xl md:text-9xl lg:text-[10rem] font-black tracking-tight tabular-nums ${timerColor}`}>
-                {/* Mostra apenas 0.00 durante a resolução para evitar qualquer distração visual */}
-                {timerState === "running" ? "0.00" : formatTime(time)}
+                {/* Correção da tela branca: passamos uma string pura e segura para o render do React */}
+                {timerState === "running" ? "0:00.000" : formatTime(time)}
               </div>
               {timerState === "stopped" && diffMsg && (
                 <div className={`absolute -bottom-10 left-1/2 -translate-x-1/2 text-xs font-bold tracking-wider uppercase bg-zinc-900 border border-zinc-800 px-3 py-1 rounded-lg ${diffMsg === "DNF" || diffMsg.startsWith("+") ? "text-red-400" : "text-emerald-400"}`}>
@@ -340,7 +333,7 @@ export default function TimerUI({ user, auth }) {
             </div>
           </div>
 
-          {/* FLUXO DE AÇÕES AUTOMÁTICAS / BOTAO DNF */}
+          {/* BOTOES */}
           <div className="w-full flex items-center justify-center min-h-[50px]">
             {timerState === "stopped" && (
               <div className="w-full flex flex-col sm:flex-row gap-4 justify-center">
