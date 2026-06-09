@@ -17,7 +17,7 @@ import {
   limit,
   where
 } from "firebase/firestore";
-import { LogOut, Trophy, Zap, Check, Trash2, XCircle, RefreshCw, Clock, Copy } from "lucide-react";
+import { LogOut, Trophy, Trash2, RefreshCw, Clock, Copy, Check, AlertTriangle } from "lucide-react";
 
 export default function TimerUI({ user, auth }) {
   const { timerState, time, resetTimer, startHolding, releaseHolding } = useStackmatTimer();
@@ -27,31 +27,14 @@ export default function TimerUI({ user, auth }) {
   const [diffMsg, setDiffMsg] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [userHistory, setUserHistory] = useState([]);
-  const [displayTime, setDisplayTime] = useState(0);
   const [copiedId, setCopiedId] = useState(null);
 
-  // Faz o cronômetro rodar na tela em tempo real
-  useEffect(() => {
-    let animationFrameId;
-    if (timerState === "running") {
-      const startTime = Date.now() - time;
-      const updateClock = () => {
-        setDisplayTime(Date.now() - startTime);
-        animationFrameId = requestAnimationFrame(updateClock);
-      };
-      animationFrameId = requestAnimationFrame(updateClock);
-    } else {
-      setDisplayTime(time);
-    }
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [timerState, time]);
-
-  // Inicializa dados e escuta o Ranking e o Histórico Completo em tempo real
+  // Inicializa dados e escuta Firestore em tempo real
   useEffect(() => {
     setScramble(generateScramble());
     fetchPersonalBest();
 
-    // 1. Ranking Global (Melhor tempo de cada amigo)
+    // 1. Ranking entre Amigos (Focado nos melhores PBs de cada um)
     const qRank = query(collection(db, "users"), orderBy("personalBest", "asc"), limit(10));
     const unsubRank = onSnapshot(qRank, (snapshot) => {
       const rankingData = [];
@@ -61,7 +44,7 @@ export default function TimerUI({ user, auth }) {
       setLeaderboard(rankingData);
     });
 
-    // 2. MELHORIA 2: Histórico completo do usuário (Independente de ser o melhor tempo)
+    // 2. Histórico Pessoal Completo de tentativas
     const qHistory = query(
       collection(db, "solves"),
       where("uid", "==", user.uid),
@@ -91,72 +74,113 @@ export default function TimerUI({ user, auth }) {
     }
   };
 
+  // REQUISITO: SALVAMENTO AUTOMÁTICO ASSIM QUE O CRONÔMETRO PARA
   useEffect(() => {
-    if (timerState === "stopped") {
-      if (personalBest !== null) {
-        const diff = time - personalBest;
-        const diffFormat = (diff > 0 ? "+" : "") + (diff / 1000).toFixed(2);
-        setDiffMsg(diffFormat);
-      } else {
-        setDiffMsg("Novo PB!");
-      }
-    } else {
-      setDiffMsg(null);
+    if (timerState === "stopped" && time > 0) {
+      autoSaveSolve(time, false);
     }
-  }, [timerState, time, personalBest]);
+  }, [timerState]);
 
-  // Salva o tempo e atrela o scramble correspondente
-  const handleSave = async () => {
+  // Captura atalho de teclado "D" para marcar a última resolução como DNF rapidamente
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (timerState === "stopped" && e.key.toLowerCase() === "d") {
+        handleLastSolveToDNF();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [timerState, userHistory]);
+
+  // Função centralizada para salvar resoluções na nuvem de forma automática
+  const autoSaveSolve = async (solveTime, isDNF = false) => {
     try {
-      if (user?.uid) {
-        // MELHORIA 3: Gravando o tempo junto com o Scramble oficial usado
-        await addDoc(collection(db, "solves"), {
-          uid: user.uid,
-          displayName: user.displayName || "Cubista",
-          time: time,
-          scramble: scramble, // Salva para que outros possam copiar e tentar bater
-          date: serverTimestamp(),
-        });
+      if (!user?.uid) return;
 
-        // Se for menor do que o PB atual, atualiza o placar dos amigos
-        if (personalBest === null || time < personalBest) {
+      const currentScramble = scramble;
+
+      // 1. Grava a tentativa na lista geral de solves
+      await addDoc(collection(db, "solves"), {
+        uid: user.uid,
+        displayName: user.displayName || "Cubista",
+        time: solveTime,
+        scramble: currentScramble,
+        isDNF: isDNF,
+        date: serverTimestamp(),
+      });
+
+      // 2. Só calcula recordes/PB se a resolução NÃO for um DNF
+      if (!isDNF) {
+        if (personalBest === null || solveTime < personalBest) {
           await setDoc(
             doc(db, "users", user.uid),
             {
               uid: user.uid,
               displayName: user.displayName || "Cubista",
-              personalBest: time,
+              personalBest: solveTime,
             },
             { merge: true }
           );
-          setPersonalBest(time);
+          setPersonalBest(solveTime);
+          setDiffMsg("Novo PB!");
+        } else {
+          const diff = solveTime - personalBest;
+          setDiffMsg((diff > 0 ? "+" : "") + (diff / 1000).toFixed(2));
         }
+      } else {
+        setDiffMsg("DNF");
       }
+
+      // Prepara o próximo cenário instantaneamente
+      setScramble(generateScramble());
     } catch (e) {
-      console.error("Erro ao salvar dados:", e);
+      console.error("Erro no salvamento automático:", e);
     }
-    resetAndNext();
   };
 
-  // MELHORIA 1: Excluir tempos já salvos e recalcular automaticamente o PB se o excluído for o melhor
-  const handleDeleteSolve = async (solveId, solveTime) => {
-    if (!confirm("Deseja apagar permanentemente esta resolução do seu histórico?")) return;
+  // Converte a resolução recém-feita em DNF caso o botão ou atalho seja acionado
+  const handleLastSolveToDNF = async () => {
+    if (userHistory.length === 0) return;
+    const lastSolve = userHistory[0];
 
     try {
-      // 1. Remove o documento da coleção geral do Firestore
-      await deleteDoc(doc(db, "solves", solveId));
-
-      // 2. Se o tempo que você deletou era o seu Personal Best, precisamos recalcular qual é o seu novo recorde
-      if (solveTime === personalBest) {
-        const remainingSolves = userHistory.filter((s) => s.id !== solveId);
-        
-        if (remainingSolves.length === 0) {
-          // Se não sobrou nenhum tempo no histórico, zera o PB do ranking
+      // Atualiza o registro no Firestore marcando como DNF
+      await setDoc(doc(db, "solves", lastSolve.id), { isDNF: true }, { merge: true });
+      
+      // Se esse tempo deletado era o seu recorde, força a reavaliação do Placar Geral
+      if (lastSolve.time === personalBest) {
+        const remaining = userHistory.slice(1).filter(s => !s.isDNF);
+        if (remaining.length === 0) {
           setPersonalBest(null);
           await setDoc(doc(db, "users", user.uid), { personalBest: null }, { merge: true });
         } else {
-          // Caso contrário, pega o menor tempo restante na lista e define como novo PB
-          const newBest = Math.min(...remainingSolves.map((s) => s.time));
+          const newBest = Math.min(...remaining.map((s) => s.time));
+          setPersonalBest(newBest);
+          await setDoc(doc(db, "users", user.uid), { personalBest: newBest }, { merge: true });
+        }
+      }
+      setDiffMsg("Marcado como DNF");
+      resetTimer();
+    } catch (e) {
+      console.error("Erro ao converter para DNF:", e);
+    }
+  };
+
+  // Exclui tempos do histórico e recalcula o ranking
+  const handleDeleteSolve = async (solveId, solveTime, isSolveDNF) => {
+    if (!confirm("Deseja apagar permanentemente esta resolução do seu histórico?")) return;
+
+    try {
+      await deleteDoc(doc(db, "solves", solveId));
+
+      // Se o tempo que você removeu era o seu PB ativo, recalcula o ranking com os tempos válidos restantes
+      if (!isSolveDNF && solveTime === personalBest) {
+        const remaining = userHistory.filter((s) => s.id !== solveId && !s.isDNF);
+        if (remaining.length === 0) {
+          setPersonalBest(null);
+          await setDoc(doc(db, "users", user.uid), { personalBest: null }, { merge: true });
+        } else {
+          const newBest = Math.min(...remaining.map((s) => s.time));
           setPersonalBest(newBest);
           await setDoc(doc(db, "users", user.uid), { personalBest: newBest }, { merge: true });
         }
@@ -164,12 +188,6 @@ export default function TimerUI({ user, auth }) {
     } catch (e) {
       console.error("Erro ao deletar tempo:", e);
     }
-  };
-
-  const handleDNF = () => { resetAndNext(); };
-  const resetAndNext = () => {
-    setScramble(generateScramble());
-    resetTimer();
   };
 
   const copyScrambleToClipboard = (scrambleText, id) => {
@@ -214,19 +232,19 @@ export default function TimerUI({ user, auth }) {
         </div>
       </header>
 
-      {/* PAINEL CENTRAL */}
+      {/* LAYOUT PRINCIPAL */}
       <main className="grid grid-cols-1 lg:grid-cols-12 gap-6 my-auto py-6 max-w-7xl w-full mx-auto items-stretch">
         
-        {/* COLUNA ESQUERDA: RANKING E SEUS HISTÓRICOS */}
+        {/* COLUNA ESQUERDA (RANKING + HISTÓRICO) */}
         <section className={`lg:col-span-4 flex flex-col gap-4 transition-all duration-200 ${timerState === "running" ? "opacity-0 blur-md pointer-events-none" : "opacity-100"}`}>
           
-          {/* PLACAR DOS AMIGOS */}
+          {/* RANKING ONLINE CONTÍNUO */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg flex-1">
             <div className="flex items-center gap-2 pb-2 border-b border-zinc-800 mb-3">
               <Trophy className="w-4 h-4 text-amber-400" />
               <h2 className="text-xs font-black uppercase tracking-wider text-zinc-300">Ranking entre Amigos</h2>
             </div>
-            <div className="space-y-1.5 overflow-y-auto max-h-[190px] pr-1">
+            <div className="space-y-1.5 overflow-y-auto max-h-[180px] pr-1">
               {leaderboard.map((player, idx) => (
                 <div key={player.uid} className={`flex items-center justify-between p-2 rounded-xl border text-xs ${player.uid === user?.uid ? "bg-amber-500/10 border-amber-500/30" : "bg-zinc-950 border-zinc-800/60"}`}>
                   <span className="font-bold text-zinc-400 w-5">{idx + 1}°</span>
@@ -237,36 +255,38 @@ export default function TimerUI({ user, auth }) {
             </div>
           </div>
 
-          {/* HISTÓRICO ATUALIZADO COM OPÇÃO DE COPIAR EMBARALHAMENTO E LIXEIRA */}
+          {/* HISTÓRICO COMPLETO COM INDICAÇÃO DE SCRAMBLE E DNF */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg flex-1">
             <div className="flex items-center gap-2 pb-2 border-b border-zinc-800 mb-3">
               <Clock className="w-4 h-4 text-cyan-400" />
               <h2 className="text-xs font-black uppercase tracking-wider text-zinc-300">Suas Últimas Soluções</h2>
             </div>
-            <div className="space-y-1.5 overflow-y-auto max-h-[190px] pr-1">
+            <div className="space-y-1.5 overflow-y-auto max-h-[180px] pr-1">
               {userHistory.length === 0 ? (
                 <div className="text-center py-6 text-zinc-600 text-xs">Nenhum tempo gravado.</div>
               ) : (
                 userHistory.map((solve, idx) => (
                   <div key={solve.id} className="flex items-center justify-between p-2 bg-zinc-950 border border-zinc-800/60 rounded-xl text-xs gap-2">
                     <span className="text-zinc-500 font-mono">#{userHistory.length - idx}</span>
-                    <span className="font-mono font-bold text-zinc-200 flex-1">{formatTime(solve.time)}</span>
+                    <span className={`font-mono font-bold flex-1 ${solve.isDNF ? "text-red-500 line-through" : "text-zinc-200"}`}>
+                      {solve.isDNF ? "DNF" : formatTime(solve.time)}
+                    </span>
                     
-                    {/* Botão de copiar o Scramble específico dessa resolução */}
+                    {/* Copiar fórmula de scramble usada */}
                     {solve.scramble && (
                       <button 
                         onClick={() => copyScrambleToClipboard(solve.scramble, solve.id)}
-                        className="text-zinc-500 hover:text-yellow-400 p-0.5 transition-colors cursor-pointer"
-                        title={`Copiar embaralhar: ${solve.scramble}`}
+                        className="text-zinc-500 hover:text-yellow-400 p-1 transition-colors cursor-pointer"
+                        title="Copiar este embaralhar para competir"
                       >
                         {copiedId === solve.id ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                       </button>
                     )}
                     
-                    {/* Botão de Excluir Resolução */}
+                    {/* Botão de Excluir */}
                     <button 
-                      onClick={() => handleDeleteSolve(solve.id, solve.time)} 
-                      className="text-zinc-600 hover:text-red-500 p-0.5 transition-colors cursor-pointer" 
+                      onClick={() => handleDeleteSolve(solve.id, solve.time, solve.isDNF)} 
+                      className="text-zinc-600 hover:text-red-500 p-1 transition-colors cursor-pointer" 
                       title="Deletar este tempo"
                     >
                       <Trash2 size={13} />
@@ -278,9 +298,11 @@ export default function TimerUI({ user, auth }) {
           </div>
         </section>
 
-        {/* COLUNA DIREITA: SCRAMBLE E CRONÔMETRO CENTRAL */}
+        {/* COLUNA DIREITA (SCRAMBLE + CRONÔMETRO) */}
         <section className="lg:col-span-8 flex flex-col gap-6 justify-between items-center min-h-[460px]">
-          <div className={`w-full transition-all duration-200 ${timerState === "running" ? "opacity-0 scale-95 pointer-events-none" : "opacity-100 scale-100"}`}>
+          
+          {/* EMBARALHADOR OFICIAL */}
+          <div className={`w-full transition-all duration-300 transform ${timerState === "running" ? "opacity-0 scale-95 pointer-events-none" : "opacity-100 scale-100"}`}>
             <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 text-center shadow-md">
               <span className="text-[9px] uppercase tracking-widest text-zinc-400 font-bold block mb-1.5">Scramble Oficial (3x3x3)</span>
               <p className="text-base md:text-lg font-mono font-black tracking-wide leading-relaxed text-yellow-400 bg-zinc-950 p-4 rounded-xl border border-zinc-800/80 select-all text-center">{scramble}</p>
@@ -288,7 +310,7 @@ export default function TimerUI({ user, auth }) {
             </div>
           </div>
 
-          {/* CRONÔMETRO CENTRAL */}
+          {/* CRONÔMETRO CENTRAL (REQUISITO: MANTÉM 0.00 PARADO ENQUANTO RODAR) */}
           <div
             onMouseDown={timerState === "idle" || timerState === "stopped" ? handleTouchZoneStart : undefined}
             onMouseUp={timerState === "holding" || timerState === "ready" ? handleTouchZoneEnd : undefined}
@@ -301,38 +323,47 @@ export default function TimerUI({ user, auth }) {
               {timerState === "holding" && "PREPARANDO..."}
               {timerState === "ready" && "SOLTE PARA COMEÇAR!"}
               {timerState === "idle" && "SEGURE ESPAÇO OU CLIQUE NA TELA PARA ARMAR"}
-              {timerState === "stopped" && "TEMPO REGISTRADO"}
+              {timerState === "running" && "TEMPO CORRENDO OCULTO..."}
+              {timerState === "stopped" && "TEMPO SALVO AUTOMATICAMENTE!"}
             </span>
 
             <div className="text-center relative">
               <div className={`font-mono text-7xl sm:text-8xl md:text-9xl lg:text-[10rem] font-black tracking-tight tabular-nums ${timerColor}`}>
-                {formatTime(displayTime)}
+                {/* Mostra apenas 0.00 durante a resolução para evitar qualquer distração visual */}
+                {timerState === "running" ? "0.00" : formatTime(time)}
               </div>
               {timerState === "stopped" && diffMsg && (
-                <div className={`absolute -bottom-10 left-1/2 -translate-x-1/2 text-xs font-bold tracking-wider uppercase bg-zinc-900 border border-zinc-800 px-3 py-1 rounded-lg ${diffMsg.startsWith("-") ? "text-emerald-400" : "text-red-400"}`}>
-                  {diffMsg !== "Novo PB!" ? `Comparativo: ${diffMsg}s` : diffMsg}
+                <div className={`absolute -bottom-10 left-1/2 -translate-x-1/2 text-xs font-bold tracking-wider uppercase bg-zinc-900 border border-zinc-800 px-3 py-1 rounded-lg ${diffMsg === "DNF" || diffMsg.startsWith("+") ? "text-red-400" : "text-emerald-400"}`}>
+                  {diffMsg === "Novo PB!" || diffMsg === "DNF" ? diffMsg : `Comparativo: ${diffMsg}s`}
                 </div>
               )}
             </div>
           </div>
 
-          {/* CONTROLES */}
+          {/* FLUXO DE AÇÕES AUTOMÁTICAS / BOTAO DNF */}
           <div className="w-full flex items-center justify-center min-h-[50px]">
             {timerState === "stopped" && (
               <div className="w-full flex flex-col sm:flex-row gap-4 justify-center">
-                <button onClick={handleSave} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold uppercase text-xs tracking-wider transition-transform hover:scale-[1.02] flex items-center justify-center gap-2 cursor-pointer"><Check className="w-4 h-4" /> Enviar Tempo ao Ranking</button>
-                <button onClick={handleDNF} className="px-8 py-3 bg-zinc-800 hover:bg-zinc-700 text-red-400 border border-zinc-700 rounded-xl font-bold uppercase text-xs tracking-wider transition-transform hover:scale-[1.02] flex items-center justify-center gap-2 cursor-pointer"><XCircle className="w-4 h-4" /> Ignorar Solução (DNF)</button>
+                <button 
+                  onClick={handleLastSolveToDNF} 
+                  className="px-8 py-3 bg-red-950/40 hover:bg-red-900/40 text-red-400 border border-red-900/30 rounded-xl font-bold uppercase text-xs tracking-wider transition-transform hover:scale-[1.02] flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <AlertTriangle className="w-4 h-4" /> Marcar como DNF (Tecla D)
+                </button>
+                <button onClick={() => { setDiffMsg(null); resetTimer(); }} className="px-8 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold uppercase text-xs tracking-wider cursor-pointer">
+                  Próxima Resolução
+                </button>
               </div>
             )}
             {timerState === "idle" && <div className="text-center text-xs tracking-wider text-zinc-500 font-bold uppercase"><span className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-[10px] text-zinc-300 mr-2">ESPAÇO</span>Segure para preparar • Solte para rodar</div>}
-            {timerState === "running" && <div className="text-cyan-400 font-black text-xs tracking-widest animate-pulse flex items-center gap-2"><Zap className="w-4 h-4" /> PRESSIONE ESPAÇO OU CLIQUE PARA PARAR</div>}
+            {timerState === "running" && <div className="text-cyan-400 font-black text-xs tracking-widest animate-pulse flex items-center gap-2"><Zap className="w-4 h-4" /> TOQUE EM QUALQUER TECLA PARA PARAR</div>}
           </div>
         </section>
       </main>
 
       <footer className="w-full flex items-center justify-between pt-4 border-t border-zinc-900 text-[10px] text-zinc-600 font-bold uppercase tracking-wider">
         <p>Arena Speedcubing © 2026</p>
-        <span>Cloud Sync Ativo</span>
+        <span>Modo Stackmat Automático • Ativo</span>
       </footer>
     </div>
   );
