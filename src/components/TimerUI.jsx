@@ -29,12 +29,10 @@ export default function TimerUI({ user, auth }) {
   const [userHistory, setUserHistory] = useState([]);
   const [copiedId, setCopiedId] = useState(null);
 
-  // 1. Escuta o Banco de Dados em tempo real
   useEffect(() => {
     setScramble(generateScramble());
     fetchPersonalBest();
 
-    // Ranking Geral de Amigos
     const qRank = query(collection(db, "users"), orderBy("personalBest", "asc"), limit(10));
     const unsubRank = onSnapshot(qRank, (snapshot) => {
       const rankingData = [];
@@ -44,7 +42,6 @@ export default function TimerUI({ user, auth }) {
       setLeaderboard(rankingData);
     });
 
-    // Histórico Individual 
     const qHistory = query(collection(db, "solves"), where("uid", "==", user.uid));
     const unsubHistory = onSnapshot(qHistory, (snapshot) => {
       const historyData = [];
@@ -52,7 +49,6 @@ export default function TimerUI({ user, auth }) {
         historyData.push({ id: doc.id, ...doc.data() });
       });
       
-      // Ordenação corrigida com Optional Chaining (à prova de null/undefined)
       historyData.sort((a, b) => {
         const timeA = a.date?.toMillis?.() || Date.now();
         const timeB = b.date?.toMillis?.() || Date.now();
@@ -77,7 +73,6 @@ export default function TimerUI({ user, auth }) {
     }
   };
 
-  // Comparativo de tempo ao parar
   useEffect(() => {
     if (timerState === "stopped") {
       if (personalBest !== null) {
@@ -91,7 +86,6 @@ export default function TimerUI({ user, auth }) {
     }
   }, [timerState, time, personalBest]);
 
-  // SALVAMENTO MANUAL DE TEMPO VÁLIDO
   const handleSave = async () => {
     try {
       if (!user?.uid) return;
@@ -120,7 +114,6 @@ export default function TimerUI({ user, auth }) {
     resetAndNext();
   };
 
-  // SALVAMENTO MANUAL COMO DNF
   const handleDNF = async () => {
     try {
       if (!user?.uid) return;
@@ -140,18 +133,14 @@ export default function TimerUI({ user, auth }) {
     resetAndNext();
   };
 
-  // DELETAR TEMPO (EXCLUSÃO OTIMISTA INSTANTÂNEA)
   const handleDeleteSolve = async (solveId, solveTime, isSolveDNF) => {
     if (!confirm("Deseja apagar permanentemente esta resolução do seu histórico?")) return;
 
-    // 1. Remove da tela IMEDIATAMENTE (Otimista)
     setUserHistory((prev) => prev.filter((s) => s.id !== solveId));
 
     try {
-      // 2. Executa a deleção real no Firebase no background
       await deleteDoc(doc(db, "solves", solveId));
 
-      // 3. Recalcula o Recorde (PB) se o tempo excluído era o seu melhor tempo
       if (!isSolveDNF && solveTime === personalBest) {
         const remaining = userHistory.filter((s) => s.id !== solveId && !s.isDNF);
         if (remaining.length === 0) {
@@ -164,8 +153,7 @@ export default function TimerUI({ user, auth }) {
         }
       }
     } catch (e) {
-      console.error("Erro ao deletar tempo:", e);
-      alert("Houve um problema com os servidores. O tempo não pôde ser excluído.");
+      console.error("Erro ao deletar:", e);
     }
   };
 
@@ -180,16 +168,14 @@ export default function TimerUI({ user, auth }) {
     setTimeout(() => setCopiedId(null), 1500);
   };
 
+  // Funções de Toque na Tela
   const handleTouchZoneStart = (e) => { e.preventDefault(); startHolding(); };
   const handleTouchZoneEnd = (e) => { e.preventDefault(); releaseHolding(); };
 
   let timerColor = "text-zinc-100";
   let timerBg = "bg-zinc-900/50 border-zinc-800";
 
-  if (timerState === "holding") {
-    timerColor = "text-red-500 font-bold";
-    timerBg = "bg-red-950/10 border-red-500/40";
-  } else if (timerState === "ready") {
+  if (timerState === "ready") {
     timerColor = "text-emerald-400 font-bold";
     timerBg = "bg-emerald-950/20 border-emerald-500/50";
   } else if (timerState === "running") {
@@ -200,7 +186,6 @@ export default function TimerUI({ user, auth }) {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col justify-between p-4 md:p-6 font-sans select-none">
       
-      {/* BARRA SUPERIOR */}
       <header className="w-full flex items-center justify-between pb-4 border-b border-zinc-800">
         <div className="bg-zinc-900 border border-zinc-800 px-4 py-2 rounded-xl">
           <span className="text-[9px] uppercase tracking-wider text-zinc-400 font-bold block">Seu Recorde</span>
@@ -216,10 +201,8 @@ export default function TimerUI({ user, auth }) {
         </div>
       </header>
 
-      {/* LAYOUT PRINCIPAL */}
       <main className="grid grid-cols-1 lg:grid-cols-12 gap-6 my-auto py-6 max-w-7xl w-full mx-auto items-stretch">
         
-        {/* COLUNA ESQUERDA */}
         <section className={`lg:col-span-4 flex flex-col gap-4 transition-all duration-200 ${timerState === "running" ? "opacity-0 blur-md pointer-events-none" : "opacity-100"}`}>
           
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow-lg flex-1">
@@ -279,7 +262,6 @@ export default function TimerUI({ user, auth }) {
           </div>
         </section>
 
-        {/* COLUNA DIREITA */}
         <section className="lg:col-span-8 flex flex-col gap-6 justify-between items-center min-h-[460px]">
           
           <div className={`w-full transition-all duration-300 transform ${timerState === "running" ? "opacity-0 scale-95 pointer-events-none" : "opacity-100 scale-100"}`}>
@@ -290,24 +272,25 @@ export default function TimerUI({ user, auth }) {
             </div>
           </div>
 
+          {/* ÁREA DE CLIQUE E CRONÔMETRO */}
           <div
-            onMouseDown={timerState === "idle" || timerState === "stopped" ? handleTouchZoneStart : undefined}
-            onMouseUp={timerState === "holding" || timerState === "ready" ? handleTouchZoneEnd : undefined}
-            onTouchStart={timerState === "idle" || timerState === "stopped" ? handleTouchZoneStart : undefined}
-            onTouchEnd={timerState === "holding" || timerState === "ready" ? handleTouchZoneEnd : undefined}
+            onMouseDown={handleTouchZoneStart}
+            onMouseUp={handleTouchZoneEnd}
+            onTouchStart={handleTouchZoneStart}
+            onTouchEnd={handleTouchZoneEnd}
             className={`w-full flex-1 flex flex-col items-center justify-center p-8 border rounded-3xl cursor-pointer transition-all duration-150 relative overflow-hidden ${timerBg}`}
             style={{ touchAction: "none" }}
           >
             <span className={`absolute top-4 text-[9px] font-black tracking-widest uppercase text-center ${timerColor}`}>
-              {timerState === "holding" && "PREPARANDO..."}
               {timerState === "ready" && "SOLTE PARA COMEÇAR!"}
               {timerState === "idle" && "SEGURE ESPAÇO OU CLIQUE NA TELA PARA ARMAR"}
               {timerState === "running" && "RESOLVENDO..."}
               {timerState === "stopped" && "TEMPO PARADO! ESCOLHA ABAIXO:"}
             </span>
 
-            <div className="text-center relative">
+            <div className="text-center relative pointer-events-none">
               <div className={`font-mono text-7xl sm:text-8xl md:text-9xl lg:text-[10rem] font-black tracking-tight tabular-nums ${timerColor}`}>
+                {/* Mantém em 0.00 enquanto resolve para não gerar ansiedade */}
                 {timerState === "running" ? "0.00" : formatTime(time || 0)}
               </div>
               {timerState === "stopped" && diffMsg && (
@@ -338,8 +321,8 @@ export default function TimerUI({ user, auth }) {
                 </button>
               </div>
             )}
-            {timerState === "idle" && <div className="text-center text-xs tracking-wider text-zinc-500 font-bold uppercase"><span className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-[10px] text-zinc-300 mr-2">ESPAÇO</span>Segure para preparar • Solte para rodar</div>}
-            {timerState === "running" && <div className="text-cyan-400 font-black text-xs tracking-widest animate-pulse flex items-center gap-2"><Zap className="w-4 h-4" /> TOQUE EM QUALQUER TECLA PARA PARAR</div>}
+            {timerState === "idle" && <div className="text-center text-xs tracking-wider text-zinc-500 font-bold uppercase"><span className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-[10px] text-zinc-300 mr-2">ESPAÇO</span>Segure para armar • Solte para rodar</div>}
+            {timerState === "running" && <div className="text-cyan-400 font-black text-xs tracking-widest animate-pulse flex items-center gap-2"><Zap className="w-4 h-4" /> TOQUE EM QUALQUER TECLA OU NA TELA PARA PARAR</div>}
           </div>
         </section>
       </main>
